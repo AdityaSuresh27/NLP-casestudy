@@ -404,10 +404,17 @@ class MCTS:
     
     def _retrieve_relevant_chunks(self, idea: str) -> List[str]:
         """Retrieve relevant text chunks for a given idea."""
-        # Placeholder implementation - in a real system, this would use a retrieval system
         try:
-            # For now, return empty list which is handled gracefully by the agent
-            return []
+            queries = self._generate_retrieval_queries(idea)
+            if not queries:
+                logger.warning("No retrieval queries generated, falling back to raw idea text")
+                queries = [idea]
+
+            chunks = self._retrieve_and_process_papers(queries)
+            if not chunks:
+                return []
+
+            return self._select_context_chunks(chunks, n_chunks=5)
         except Exception as e:
             logger.error(f"Error retrieving chunks: {e}")
             return []
