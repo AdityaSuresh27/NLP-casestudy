@@ -604,6 +604,7 @@ def chat():
                     "review_scores": getattr(current_node.state, "review_scores", {}),
                     "average_score": getattr(current_node.state, "average_score", 0.0),
                     "eval_metrics": getattr(current_node.state, "eval_metrics", {}),
+                    "review_feedback": getattr(current_node.state, "review_feedback", {}),
                 }
             )
                 
