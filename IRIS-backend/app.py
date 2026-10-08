@@ -55,6 +55,57 @@ chat_messages = []
 main_idea = "Generating Research Idea..."
 retrieval_results = {}
 
+# --- Evaluation metrics: ROUGE, Perplexity, MLE (log-likelihood) ---
+from rouge_score import rouge_scorer
+import torch
+from transformers import GPT2LMHeadModel, GPT2TokenizerFast
+
+_perplexity_model = None
+_perplexity_tokenizer = None
+
+def _load_perplexity_model():
+    global _perplexity_model, _perplexity_tokenizer
+    if _perplexity_model is None:
+        print("Loading GPT-2 for perplexity/MLE scoring (one-time)...")
+        _perplexity_tokenizer = GPT2TokenizerFast.from_pretrained("gpt2")
+        _perplexity_model = GPT2LMHeadModel.from_pretrained("gpt2")
+        _perplexity_model.eval()
+    return _perplexity_model, _perplexity_tokenizer
+
+def compute_eval_metrics(generated_text: str, reference_text: str) -> dict:
+    """ROUGE (vs. research goal) + perplexity/MLE log-likelihood for the
+    generated research idea."""
+    metrics = {}
+    try:
+        scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+        scores = scorer.score(reference_text or "", generated_text or "")
+        metrics["rouge1_f1"] = round(scores["rouge1"].fmeasure, 4)
+        metrics["rouge2_f1"] = round(scores["rouge2"].fmeasure, 4)
+        metrics["rougeL_f1"] = round(scores["rougeL"].fmeasure, 4)
+    except Exception as e:
+        logger.error(f"Error computing ROUGE: {e}")
+        metrics["rouge1_f1"] = metrics["rouge2_f1"] = metrics["rougeL_f1"] = None
+
+    try:
+        model, tokenizer = _load_perplexity_model()
+        encodings = tokenizer(generated_text or "", return_tensors="pt", truncation=True, max_length=1024)
+        input_ids = encodings.input_ids
+        if input_ids.size(1) < 2:
+            metrics["perplexity"] = None
+            metrics["mle_log_likelihood"] = None
+        else:
+            with torch.no_grad():
+                outputs = model(input_ids, labels=input_ids)
+                avg_neg_log_likelihood = outputs.loss.item()
+            metrics["perplexity"] = round(float(torch.exp(torch.tensor(avg_neg_log_likelihood))), 2)
+            metrics["mle_log_likelihood"] = round(-avg_neg_log_likelihood, 4)
+    except Exception as e:
+        logger.error(f"Error computing perplexity/MLE score: {e}")
+        metrics["perplexity"] = None
+        metrics["mle_log_likelihood"] = None
+
+    return metrics
+
 def allowed_file(filename):
     """Check if the file extension is allowed"""
     # Get file extension (last part after the dot)
@@ -477,7 +528,7 @@ def chat():
                     if "average_score" in review_data:
                         first_idea_state.average_score = review_data["average_score"]
                         first_idea_state.reward = review_data["average_score"]
-                
+                first_idea_state.eval_metrics = compute_eval_metrics(llm_response, user_message)
                 # Add the first generated idea as a child of the root node
                 first_idea_node = current_root.add_child(first_idea_state, "generate")
                 
@@ -528,7 +579,7 @@ def chat():
                     if "average_score" in review_data:
                         new_state.average_score = review_data["average_score"]
                         new_state.reward = review_data["average_score"]
-                
+                new_state.eval_metrics = compute_eval_metrics(improved_content, current_node.state.research_goal)
                 # Create new node and add as child of current node
                 new_node = current_node.add_child(new_state, "direct_feedback")
                 current_node = new_node
@@ -552,6 +603,7 @@ def chat():
                     "initial_proposal": current_root.state.research_goal if current_root else user_message,
                     "review_scores": getattr(current_node.state, "review_scores", {}),
                     "average_score": getattr(current_node.state, "average_score", 0.0),
+                    "eval_metrics": getattr(current_node.state, "eval_metrics", {}),
                 }
             )
                 
