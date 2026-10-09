@@ -6,7 +6,18 @@ import {
   BarChart2, GitBranch, BookOpen, MessageSquare, ChevronDown, ChevronRight, TrendingUp
 } from 'lucide-react';
 import './index.css';
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import "katex/dist/katex.min.css";
 
+function cleanIdea(text) {
+  return (text || "")
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => "$$" + m + "$$")
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => "$" + m + "$")
+    .replace(/^\s*",\s*$/gm, "");
+}
 const API_BASE_URL = 'http://127.0.0.1:5000/api';
 
 function TreeNode({ node }) {
@@ -63,6 +74,50 @@ function ScoreTrendChart({ history }) {
         return <circle key={i} cx={x} cy={y} r="1.2" fill="var(--primary-color)" vectorEffect="non-scaling-stroke" />;
       })}
     </svg>
+  );
+}
+
+function FeedbackBox({ onResult }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const send = async () => {
+    if (!text.trim() || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      onResult(data);
+      setText("");
+    } catch (e) {
+      alert("Feedback failed: " + e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="glass-panel">
+      <h3 style={{ margin: "0 0 0.5rem 0" }}>Your Feedback</h3>
+      <p style={{ color: "var(--text-muted)", fontSize: "0.85rem", margin: "0 0 0.75rem 0" }}>
+        Tell the AI what to change. It will revise the idea and re-score it.
+      </p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="e.g. Make the experiment plan more concrete, add a baseline comparison..."
+        rows={3}
+        style={{ width: "100%", padding: "0.6rem", borderRadius: "8px", background: "rgba(255,255,255,0.04)", color: "inherit", border: "1px solid var(--border-color)", resize: "vertical" }}
+      />
+      <button className="btn" style={{ marginTop: "0.5rem" }} onClick={send} disabled={busy}>
+        {busy ? "Revising..." : "Submit Feedback"}
+      </button>
+    </div>
   );
 }
 
@@ -316,11 +371,32 @@ export default function App() {
                     <Download size={16} /> Export
                   </button>
                 </div>
-                <div style={{ marginTop: '1.5rem', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
-                  {idea}
-                </div>
+                <div className="idea-markdown" style={{ marginTop: '1.5rem', lineHeight: '1.6' }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {cleanIdea(idea)}
+                  </ReactMarkdown>
+                </div>  
               </div>
-
+              <FeedbackBox
+                onResult={(data) => {
+                  const newReview = {
+                    total_score: data.average_score || 0,
+                    aspect_scores: data.review_scores || {}
+                  };
+                  setIdea(data.idea);
+                  setReview(newReview);
+                  setReviewFeedback(data.review_feedback || {});
+                  setMetrics(data.eval_metrics || {});
+                  addToHistory({
+                    action: 'Human Feedback',
+                    idea: data.idea,
+                    review: newReview,
+                    metrics: data.eval_metrics || {},
+                    feedback: data.review_feedback || {}
+                  });
+                  fetchTree();
+                }}
+              />
               {/* Retrieved Papers Panel */}
               {papers.length > 0 && (
                 <div className="glass-panel">
